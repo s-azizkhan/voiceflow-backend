@@ -9,6 +9,12 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "python-multipart>=0.0.20",
     "pyinstaller>=6.0.0",
+    "pystray>=0.19.5",
+    "pillow>=12.2.0",
+    "pynput>=1.8.1",
+    "win10toast>=0.9",
+    "websocket-client>=1.9.0",
+    "pyperclip>=1.11.0",
 ]
 [project.optional-dependencies]
 manager = [

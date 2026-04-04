@@ -7,6 +7,7 @@ Usage:
 """
 
 import asyncio
+import os
 import signal
 import sys
 import threading
@@ -29,7 +30,10 @@ PORT = 8765
 # ── Load env ───────────────────────────────────────────────────────────────────
 
 if getattr(sys, "frozen", False):
-    env_path = Path(sys._MEIPASS) / ".env"
+    # In the installer layout: VoiceFlow/voiceflow-server.exe
+    # _internal/ is next to the exe in dist/VoiceFlow/_internal/
+    exe_dir = Path(sys._MEIPASS)
+    env_path = exe_dir / "_internal" / ".env"
 else:
     env_path = Path(__file__).parent / ".env"
 load_dotenv(env_path)
@@ -117,7 +121,7 @@ let sse;
 
 function log(msg) {
   const box = $('log'), ts = new Date().toLocaleTimeString();
-  box.appendChild(Object.assign(document.createElement('div'),{className:'log-line',innerHTML:'<span class=log-ts>['+ts+']</span> '+escape(msg)}));
+  box.appendChild(Object.assign(document.createElement('div'),{className:'log-line',innerHTML:'<span class=log-ts>['+ts+']</span> '+encodeURIComponent(msg).replace(/'/g,'%27').replace(/"/g,'%22')}));
   box.scrollTop = box.scrollHeight;
 }
 
@@ -421,4 +425,10 @@ signal.signal(signal.SIGINT, shutdown_handler)
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Fix: ensure stdout/stderr are valid in frozen windowed mode (uvicorn checks isatty)
+    if getattr(sys, "frozen", False):
+        if sys.stdout is None:
+            sys.stdout = open(os.devnull, "w")
+        if sys.stderr is None:
+            sys.stderr = open(os.devnull, "w")
     uvicorn.run(app, host="0.0.0.0", port=PORT)

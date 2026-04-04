@@ -1,58 +1,77 @@
-# voiceflow-backend
+# VoiceFlow
 
-Real-time voice transcription backend using **Moonshine** (on-device, no API keys required).
+Real-time voice transcription server using **Moonshine** (on-device, no API keys required).
 
-## Portable Executable (recommended)
+## Components
+
+| File | Description |
+|------|-------------|
+| `voiceflow-server.exe` | Transcription engine (FastAPI + WebSocket) |
+| `voiceflow-manager.exe` | System tray + global hotkey controller |
+
+Both executables live in the same installation folder.
+
+## Quick Start
 
 ```bash
-# Build
-.venv\Scripts\python.exe -m PyInstaller server.spec -y
-
-# Run
-dist\voiceflow-server\voiceflow-server.exe
+# Run the manager — it auto-starts the server and registers Ctrl+Alt+V
+dist\VoiceFlow\manager\voiceflow-manager.exe
 ```
 
-The `.exe` auto-starts on `http://0.0.0.0:8765`.
+The tray icon appears. Press **Ctrl+Alt+V** anywhere to start/stop listening.
 
-## Web Dashboard
+## Global Hotkey
 
-Open **http://localhost:8765/__dashboard__** in your browser to:
-- View server status
-- Stop active transcription sessions
-- Restart sessions
+| Hotkey | Action |
+|--------|--------|
+| `Ctrl+Alt+V` (first press) | Start listening — tray icon turns red |
+| `Ctrl+Alt+V` (second press) | Stop — transcribed text shown in toast notification |
+
+If no speech is detected, nothing is copied.
+
+## System Tray Menu
+
+Right-click the tray icon:
+
+- **Server: Running/Stopped** — current status
+- **Start Server / Stop Server / Restart Server**
+- **Open Dashboard** → http://localhost:8765/__dashboard__
+- **Open API Root** → http://localhost:8765/
+- **Exit**
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/` | Server status + model info |
-| `GET` | `/__dashboard__` | Web control panel |
+| `GET` | `/` | Server status |
 | `GET` | `/health` | Health check |
-| `GET` | `/__ctrl__/status` | Control API status |
-| `POST` | `/__ctrl__/stop` | Stop active sessions |
-| `POST` | `/__ctrl__/restart` | Restart sessions |
+| `GET` | `/__dashboard__` | Web control panel |
+| `POST` | `/vocal/start` | Start hotkey listening session |
+| `POST` | `/vocal/stop` | Stop session, return transcribed text |
 | `WS` | `/transcribe` | WebSocket live transcription |
+| `POST` | `/__ctrl__/stop` | Stop all WS sessions |
 
-**WebSocket** — connect to `ws://localhost:8765/transcribe`, receive events:
-
-```json
-{ "type": "partial", "text": "hello wor" }
-{ "type": "final",   "text": "hello world" }
-```
-
-## Development
+## Build
 
 ```bash
-# Install dependencies
+# Install deps
 uv sync
 
-# Run directly
-.venv\Scripts\python.exe server.py
+# Build server
+.venv\Scripts\python.exe -m PyInstaller server.spec -y
+
+# Build manager
+.venv\Scripts\python.exe -m PyInstaller manager.spec -y
+
+# Run installer (requires Inno Setup 6)
+iscc installer\installer.iss
 ```
 
 ## Architecture
 
-- `server.py` — FastAPI + WebSocket server with built-in web dashboard
-- `server.spec` — PyInstaller spec for portable `.exe`
-- `transcripts.log` — Appended by both entry points
-- Moonshine model downloaded on first run (~300 MB, cached in `%LOCALAPPDATA%\moonshine_voice`)
+- `server.py` — FastAPI + WebSocket server; `MicTranscriber` per session
+- `manager.py` — System tray app, hotkey listener, server subprocess manager
+- `server.spec` — PyInstaller spec for `voiceflow-server.exe`
+- `manager.spec` — PyInstaller spec for `voiceflow-manager.exe`
+- `installer.iss` — Inno Setup installer script
+- Moonshine model cached at `%LOCALAPPDATA%\moonshine_voice`
