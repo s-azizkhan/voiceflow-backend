@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bun run:*)",
+      "Bash(ls node_modules/postgres/*.js)",
+      "Bash(*)",
+      "Read(*)",
+      "Edit(*)",
+      "Write(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "TodoWrite(*)",
+      "NotebookEdit(*)",
+      "Agent(*)",
+      "Skill(*)",
+      "TaskOutput(*)",
+      "TaskStop(*)",
+      "mcp__supabase__execute_sql"
+    ],
+    "defaultMode": "bypassPermissions"
+  }
+}
