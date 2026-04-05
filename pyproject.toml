@@ -15,6 +15,12 @@ dependencies = [
     "win10toast>=0.9",
     "websocket-client>=1.9.0",
     "pyperclip>=1.11.0",
+    "numpy>=2.4.4",
+    "sounddevice>=0.5.5",
+    "pathlib>=1.0.1",
+    "torch>=2.11.0",
+    "moonshine-voice>=0.0.51",
+    "psutil>=7.2.2",
 ]
 [project.optional-dependencies]
 manager = [

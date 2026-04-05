@@ -13,6 +13,14 @@ import threading
 import numpy as np
 import sounddevice as sd
 import torch
+import os
+try:
+    import psutil
+    HAS_PSUTIL = True
+    process = psutil.Process(os.getpid())
+    process.cpu_percent(interval=None) # Initialize CPU tracking
+except ImportError:
+    HAS_PSUTIL = False
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -27,13 +35,33 @@ SAMPLE_RATE = 16000
 
 TRANSCRIPT_LOG = Path(__file__).parent / "transcripts.log"
 
+def print_usage_stats():
+    """Print CPU, RAM, and GPU memory usage statistics."""
+    stats = []
+    if HAS_PSUTIL:
+        mem_info = process.memory_info()
+        mem_mb = mem_info.rss / (1024 * 1024)
+        cpu_percent = process.cpu_percent(interval=None)
+        stats.append(f"CPU: {cpu_percent:.1f}%")
+        stats.append(f"RAM: {mem_mb:.1f} MB")
+    else:
+        stats.append("RAM/CPU tracking needs `pip install psutil`")
+
+    if torch.cuda.is_available():
+        gpu_allocated = torch.cuda.memory_allocated() / (1024 * 1024)
+        gpu_reserved = torch.cuda.memory_reserved() / (1024 * 1024)
+        stats.append(f"GPU Mem: {gpu_allocated:.1f}MB alloc, {gpu_reserved:.1f}MB res")
+    
+    if stats:
+        print(f"  [Usage Stats] {' | '.join(stats)}")
+
 def log_transcript(text: str, speaker: str = None, line_idx: int = None):
     """Append transcript to log file."""
     with open(TRANSCRIPT_LOG, "a", encoding="utf-8") as f:
         if speaker:
-            f.write(f"[{speaker}] {text}\n")
+            f.write(f"[{speaker}] {text}")
         else:
-            f.write(f"{text}\n")
+            f.write(f"{text}")
 
 # ── Load env ───────────────────────────────────────────────────────────────────
 
@@ -71,6 +99,7 @@ class LiveTranscriptListener(TranscriptEventListener):
         if text:
             print(f"  [final] {text}")
             log_transcript(text)
+            print_usage_stats()
 
 # ── Main ────────────────────────────────────────────────────────────────────────
 
@@ -103,6 +132,7 @@ def main():
     except KeyboardInterrupt:
         print("\nStopping...")
         transcriber.stop()
+        print_usage_stats()
 
 if __name__ == "__main__":
     main()
