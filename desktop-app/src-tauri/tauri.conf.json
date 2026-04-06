@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "VoiceFlow",
+  "version": "0.1.0",
+  "identifier": "com.voiceflow.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173"
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app"],
+    "category": "public.app-category.productivity",
+    "icon": [
+      "icons/icon.png"
+    ],
+    "resources": {
+      "../../server.py": "server.py"
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true
+    },
+    "windows": [
+      {
+        "title": "VoiceFlow",
+        "label": "main",
+        "width": 360,
+        "height": 480,
+        "resizable": false,
+        "fullscreen": false,
+        "center": true,
+        "alwaysOnTop": true,
+        "decorations": true,
+        "skipTaskbar": false
+      }
+    ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}

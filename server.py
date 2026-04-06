@@ -9,6 +9,7 @@ Usage:
 import asyncio
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -18,7 +19,8 @@ from typing import Optional
 import torch
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from moonshine_voice import MicTranscriber, TranscriptEventListener, get_model_for_language
 
@@ -53,6 +55,13 @@ print(f"Arch:  {model_arch}")
 # ── FastAPI app ────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="VoiceFlow Server")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=True,
+)
 active_connections: list[WebSocket] = []
 
 # ── Dashboard HTML ─────────────────────────────────────────────────────────────
@@ -115,7 +124,7 @@ button:disabled{opacity:.35;cursor:not-allowed}
 <div class=log id=log></div>
 
 <script>
-const PORT = location.port;
+const port = location.port;
 const $ = id => document.getElementById(id);
 let sse;
 
@@ -259,8 +268,21 @@ class TranscriberManager:
             await asyncio.sleep(0.5)
 
     def stop(self):
+        if not self._running:
+            return
         self._running = False
-        self.transcriber.stop()
+        try:
+            import threading
+            t = threading.Thread(target=self._safe_stop, daemon=True)
+            t.start()
+        except Exception:
+            pass
+
+    def _safe_stop(self):
+        try:
+            self.transcriber.stop()
+        except Exception:
+            pass
 
 
 managers: dict[int, TranscriberManager] = {}
@@ -302,6 +324,81 @@ async def stop_all():
     return JSONResponse({"status": "stopped"})
 
 
+# ── File transcription ──────────────────────────────────────────────────────────
+
+import tempfile
+import os
+import numpy as np
+import soundfile as sf
+
+
+@app.post("/transcribe/file")
+async def transcribe_file(file: UploadFile = File(...)):
+    """Accept audio file upload and return transcription."""
+    suffix = Path(file.filename or "upload").suffix.lower()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    # Convert WebM to WAV if needed (soundfile doesn't support WebM)
+    needs_conversion = suffix == ".webm"
+    original_tmp_path = tmp_path  # Save for cleanup
+    if needs_conversion:
+        wav_path = tmp_path + ".wav"
+        # Try multiple ffmpeg approaches
+        success = False
+        for opts in [
+            ["ffmpeg", "-y", "-vn", "-i", tmp_path, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav_path],
+            ["ffmpeg", "-y", "-i", tmp_path, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav_path],
+            ["ffmpeg", "-y", "-i", tmp_path, "-map_metadata", "-1", "-ar", "16000", "-ac", "1", "-f", "wav", wav_path],
+        ]:
+            result = subprocess.run(opts, capture_output=True, text=True)
+            if result.returncode == 0:
+                success = True
+                break
+        if not success:
+            # Provide detailed error info
+            raise RuntimeError(f"ffmpeg conversion failed for WebM file. stderr: {result.stderr[:500]}")
+        # Use the converted WAV file
+        tmp_path = wav_path
+
+    try:
+        # Read audio with soundfile (handles wav, mp3, flac, ogg, etc.)
+        data, sr = sf.read(tmp_path, dtype="float32")
+
+        # Convert stereo to mono
+        if len(data.shape) > 1:
+            data = data.mean(axis=1)
+
+        # Resample to 16kHz if needed
+        if sr != SAMPLE_RATE:
+            import scipy.signal as signal
+            num_samples = int(len(data) * SAMPLE_RATE / sr)
+            data = signal.resample(data, num_samples)
+
+        # Run synchronous transcription
+        from moonshine_voice.transcriber import Transcriber
+
+        batch_transcriber = Transcriber(
+            model_path=model_path,
+            model_arch=model_arch,
+            update_interval=0.3,
+        )
+        transcript = batch_transcriber.transcribe_without_streaming(
+            audio_data=data.tolist(),
+            sample_rate=sr,
+        )
+        batch_transcriber.close()
+
+        full_text = " ".join(line.text for line in transcript.lines)
+        return JSONResponse({"text": full_text})
+    finally:
+        os.unlink(tmp_path)  # This is the WAV (or original if not converted)
+        if needs_conversion:
+            os.unlink(original_tmp_path)  # Clean up original WebM
+
+
 # ── Vocal (hotkey-triggered) transcription ─────────────────────────────────────
 
 class VocalListener(TranscriptEventListener):
@@ -310,27 +407,27 @@ class VocalListener(TranscriptEventListener):
     def __init__(self):
         super().__init__()
         self.full_text = ""
+        self._callback_count = 0
 
     def on_line_started(self, event):
         self.full_text = event.line.text or ""
+        print(f"[VocalListener] on_line_started: '{self.full_text}'", flush=True)
 
     def on_line_text_changed(self, event):
         self.full_text = event.line.text or ""
+        self._callback_count += 1
+        print(f"[VocalListener] on_line_text_changed #{self._callback_count}: '{self.full_text}'", flush=True)
 
     def on_line_completed(self, event):
         if event.line.text:
             self.full_text = event.line.text
+        print(f"[VocalListener] on_line_completed: '{self.full_text}'", flush=True)
 
     def get_text(self) -> str:
         return self.full_text.strip()
 
     def clear(self):
         self.full_text = ""
-
-
-# Global vocal session state (one at a time)
-_vocal_manager: Optional["VocalManager"] = None
-_vocal_lock = asyncio.Lock()
 
 
 class VocalManager:
@@ -355,61 +452,122 @@ class VocalManager:
         self.transcriber.add_listener(self.listener)
         self.transcriber.start()
         self._running = True
+        last_sent = ""
         while self._running:
             await asyncio.sleep(0.3)
+            text = self.listener.full_text
+            if text and text != last_sent:
+                last_sent = text
+                try:
+                    await websocket.send_json({"type": "partial", "text": text})
+                except Exception:
+                    break
 
     def stop(self):
+        if not self._running:
+            return
         self._running = False
-        self.transcriber.stop()
+        try:
+            import threading
+            t = threading.Thread(target=self._safe_stop, daemon=True)
+            t.start()
+        except Exception:
+            pass
+
+    def _safe_stop(self):
+        try:
+            self.transcriber.stop()
+        except Exception:
+            pass
 
     def get_text(self) -> str:
         return self.listener.get_text()
 
 
+# Global vocal session state (one at a time)
+_vocal_manager: Optional["VocalManager"] = None
+_vocal_lock = asyncio.Lock()
+
+
 @app.websocket("/vocal")
 async def websocket_vocal(websocket: WebSocket):
-    """WebSocket for vocal hotkey session — manager connects here to receive transcription."""
+    """WebSocket for vocal push-to-talk — send {"action":"start"} to begin, {"action":"stop"} to end."""
     global _vocal_manager
     await websocket.accept()
-    async with _vocal_lock:
-        if _vocal_manager is None:
-            await websocket.send_json({"type": "error", "text": "no active vocal session"})
-            await websocket.close()
-            return
-        vm = _vocal_manager
-        vm.ws = websocket
-        try:
-            await vm.start(websocket)
-        except Exception:
-            pass
-        finally:
-            vm.stop()
-            _vocal_manager = None
 
+    async def send_partials():
+        """Poll listener for new text and stream partials to client."""
+        last_sent = ""
+        while _vocal_manager and _vocal_manager._running:
+            await asyncio.sleep(0.25)
+            if _vocal_manager is None:
+                break
+            text = _vocal_manager.listener.full_text
+            print(f"[send_partials] polling text='{text}' last_sent='{last_sent}'", flush=True)
+            if text and text != last_sent:
+                last_sent = text
+                try:
+                    await websocket.send_json({"type": "partial", "text": text})
+                except Exception:
+                    break
 
-@app.post("/vocal/start")
-async def vocal_start():
-    """Start a vocal transcription session. Manager should connect to /vocal WS immediately after."""
-    global _vocal_manager
-    async with _vocal_lock:
-        if _vocal_manager is not None:
-            return JSONResponse({"status": "already_listening"})
-        _vocal_manager = VocalManager()
-        return JSONResponse({"status": "listening"})
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            action = msg.get("action")
 
+            if action == "start":
+                async with _vocal_lock:
+                    if _vocal_manager is not None and _vocal_manager._running:
+                        await websocket.send_json({"type": "error", "text": "already_listening"})
+                        continue
+                    _vocal_manager = VocalManager()
+                    _vocal_manager._running = True
+                    _vocal_manager.transcriber.add_listener(_vocal_manager.listener)
+                    _vocal_manager.transcriber.start()
 
-@app.post("/vocal/stop")
-async def vocal_stop():
-    """Stop the active vocal session and return the final transcribed text."""
-    global _vocal_manager
-    async with _vocal_lock:
-        if _vocal_manager is None:
-            return JSONResponse({"status": "not_listening", "text": ""})
-        vm = _vocal_manager
-        _vocal_manager = None
-        vm.stop()
-        text = vm.get_text()
-        return JSONResponse({"status": "stopped", "text": text})
+                await websocket.send_json({"type": "started"})
+                # Stream partials in background
+                asyncio.create_task(send_partials())
+
+            elif action == "stop":
+                vm = None
+                async with _vocal_lock:
+                    if _vocal_manager is not None:
+                        vm = _vocal_manager
+                        _vocal_manager = None
+
+                if vm:
+                    vm._running = False
+                    try:
+                        import threading
+                        t = threading.Thread(target=vm.transcriber.stop, daemon=True)
+                        t.start()
+                    except Exception:
+                        pass
+                    text = vm.get_text()
+                    await websocket.send_json({"type": "final", "text": text})
+                else:
+                    await websocket.send_json({"type": "final", "text": ""})
+                break
+
+            else:
+                await websocket.send_json({"type": "error", "text": f"unknown action: {action}"})
+
+    except Exception:
+        pass
+    finally:
+        async with _vocal_lock:
+            if _vocal_manager is not None:
+                vm = _vocal_manager
+                _vocal_manager = None
+                vm._running = False
+                try:
+                    import threading
+                    t = threading.Thread(target=vm.transcriber.stop, daemon=True)
+                    t.start()
+                except Exception:
+                    pass
 
 
 # ── Shutdown ───────────────────────────────────────────────────────────────────

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VoiceFlow</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="title-row">
+        <h1>VoiceFlow</h1>
+        <span id="status-badge" class="badge offline">Offline</span>
+      </div>
+      <p class="subtitle">Click Start to record</p>
+    </header>
+
+    <div id="live-display" class="live-display">
+      <span class="hint" id="hint">Ready</span>
+    </div>
+
+    <div id="result-area" class="result-area" hidden>
+<!--      <div id="result-text" class="result-text"></div>-->
+      <button id="play-btn" class="btn btn-small">Play</button>
+      <button id="copy-btn" class="btn btn-small">Copy</button>
+    </div>
+
+    <div class="current" id="current-line"></div>
+
+    <div class="controls">
+      <button id="upload-btn" class="btn btn-secondary">
+        Upload Audio
+      </button>
+      <button id="toggle-btn" class="btn btn-primary">
+        Start Listening
+      </button>
+    </div>
+
+    <div id="notification" class="notification" hidden>Copied to clipboard!</div>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
